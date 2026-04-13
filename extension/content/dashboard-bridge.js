@@ -1,7 +1,21 @@
-// Content script injected into the HiggsBot dashboard (localhost:5173 or higgsbot.vercel.app)
+// Content script injected into the HiggsBot dashboard.
 // Bridges window.postMessage <-> chrome.storage.local
+// NOTE: Content scripts cannot use ES module imports — constants are inlined.
 
-import { STORAGE_KEYS, MESSAGE_TYPES, DEFAULTS } from '../lib/constants.js';
+const STORAGE_KEYS = {
+  QUEUE: 'hb_queue',
+  JOB_PREFIX: 'hb_job_',
+  RESULTS: 'hb_results',
+  HEARTBEAT: 'hb_heartbeat',
+};
+
+const MESSAGE_TYPES = {
+  PING: 'HIGGSBOT_PING',
+  PONG: 'HIGGSBOT_PONG',
+  QUEUE_SUBMIT: 'HIGGSBOT_QUEUE_SUBMIT',
+  QUEUE_CONTROL: 'HIGGSBOT_QUEUE_CONTROL',
+  STATE_SYNC: 'HIGGSBOT_STATE_SYNC',
+};
 
 // Listen for messages from the dashboard page
 window.addEventListener('message', async (event) => {
@@ -26,33 +40,36 @@ window.addEventListener('message', async (event) => {
 async function handleQueueSubmit(payload) {
   const { jobs, append } = payload;
 
-  // Write individual jobs
   const jobEntries = {};
   for (const job of jobs) {
     jobEntries[`${STORAGE_KEYS.JOB_PREFIX}${job.id}`] = job;
   }
   await chrome.storage.local.set(jobEntries);
 
-  // Update queue state
   if (append) {
     const stored = await chrome.storage.local.get(STORAGE_KEYS.QUEUE);
-    const existing = stored[STORAGE_KEYS.QUEUE] || { status: 'idle', jobIds: [], currentIndex: 0, totalJobs: 0, completedJobs: 0, failedJobs: 0, startedAt: null, pausedAt: null, estimatedCompletionAt: null };
+    const existing = stored[STORAGE_KEYS.QUEUE] || {
+      status: 'idle', jobIds: [], currentIndex: 0,
+      totalJobs: 0, completedJobs: 0, failedJobs: 0,
+      startedAt: null, pausedAt: null, estimatedCompletionAt: null,
+    };
     existing.jobIds.push(...jobs.map((j) => j.id));
     existing.totalJobs = existing.jobIds.length;
     await chrome.storage.local.set({ [STORAGE_KEYS.QUEUE]: existing });
   } else {
-    const queueState = {
-      status: 'running',
-      jobIds: jobs.map((j) => j.id),
-      currentIndex: 0,
-      totalJobs: jobs.length,
-      completedJobs: 0,
-      failedJobs: 0,
-      startedAt: Date.now(),
-      pausedAt: null,
-      estimatedCompletionAt: null,
-    };
-    await chrome.storage.local.set({ [STORAGE_KEYS.QUEUE]: queueState });
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.QUEUE]: {
+        status: 'running',
+        jobIds: jobs.map((j) => j.id),
+        currentIndex: 0,
+        totalJobs: jobs.length,
+        completedJobs: 0,
+        failedJobs: 0,
+        startedAt: Date.now(),
+        pausedAt: null,
+        estimatedCompletionAt: null,
+      },
+    });
   }
 }
 
@@ -75,7 +92,6 @@ async function handleQueueControl(payload) {
       queue.status = 'idle';
       break;
     case 'retry_failed':
-      // Reset failed jobs to queued
       for (const jobId of queue.jobIds) {
         const key = `${STORAGE_KEYS.JOB_PREFIX}${jobId}`;
         const jobData = await chrome.storage.local.get(key);
@@ -114,4 +130,4 @@ setInterval(async () => {
   } catch {
     // Extension context may be invalid
   }
-}, DEFAULTS.DASHBOARD_SYNC_INTERVAL_MS);
+}, 2000);
