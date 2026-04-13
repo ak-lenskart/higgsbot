@@ -4,27 +4,41 @@ import { useProductStore } from '../stores/product-store';
 import { useCharacterStore } from '../stores/character-store';
 import { useSceneStore } from '../stores/scene-store';
 import { useSettingsStore } from '../stores/settings-store';
-import { analyzeProduct } from '../services/claude-api';
+import { analyzeProduct } from '../services/ai-api';
 import { ProductCard } from '../components/analysis/ProductCard';
 
 export function AnalysisPage() {
-  const { products, currentBatchId, updateProduct, updateBatch, batches } = useProductStore();
+  const products = useProductStore((s) => s.products);
+  const currentBatchId = useProductStore((s) => s.currentBatchId);
+  const batches = useProductStore((s) => s.batches);
+  const updateProduct = useProductStore((s) => s.updateProduct);
+  const updateBatch = useProductStore((s) => s.updateBatch);
+
   const allCharacters = useCharacterStore((s) => s.characters);
   const allScenes = useSceneStore((s) => s.scenes);
   const characters = useMemo(() => allCharacters.filter((c) => c.active), [allCharacters]);
   const scenes = useMemo(() => allScenes.filter((sc) => sc.active), [allScenes]);
-  const apiKey = useSettingsStore((s) => s.apiKey);
+
+  const aiProvider = useSettingsStore((s) => s.aiProvider);
+  const getActiveApiKey = useSettingsStore((s) => s.getActiveApiKey);
   const navigate = useNavigate();
 
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
 
-  const batchProducts = products.filter((p) => p.batchId === currentBatchId);
-  const currentBatch = batches.find((b) => b.id === currentBatchId);
+  const batchProducts = useMemo(
+    () => products.filter((p) => p.batchId === currentBatchId),
+    [products, currentBatchId]
+  );
+  const currentBatch = useMemo(
+    () => batches.find((b) => b.id === currentBatchId),
+    [batches, currentBatchId]
+  );
 
   const runAnalysis = useCallback(async () => {
+    const apiKey = getActiveApiKey();
     if (!apiKey) {
-      alert('Please set your Claude API key in Settings first.');
+      alert(`Please set your ${aiProvider === 'claude' ? 'Claude' : aiProvider === 'gemini' ? 'Gemini' : 'Groq'} API key in Settings first.`);
       return;
     }
     if (characters.length === 0) {
@@ -45,7 +59,7 @@ export function AnalysisPage() {
       await updateProduct(product.id, { analysisStatus: 'analyzing' });
 
       try {
-        const result = await analyzeProduct(apiKey, product.imageUrl, characters, scenes);
+        const result = await analyzeProduct(aiProvider, apiKey, product.imageUrl, characters, scenes);
         await updateProduct(product.id, {
           analysisStatus: 'complete',
           analysisResult: result,
@@ -57,10 +71,7 @@ export function AnalysisPage() {
           selectedSceneIds: result.suggestedSceneIds,
         });
       } catch (err) {
-        await updateProduct(product.id, {
-          analysisStatus: 'error',
-          analysisResult: null,
-        });
+        await updateProduct(product.id, { analysisStatus: 'error', analysisResult: null });
         console.error(`Analysis failed for ${product.id}:`, err);
       }
 
@@ -71,9 +82,12 @@ export function AnalysisPage() {
       await updateBatch(currentBatch.id, { status: 'prompting' });
     }
     setRunning(false);
-  }, [apiKey, batchProducts, characters, scenes, updateProduct, updateBatch, currentBatch]);
+  }, [aiProvider, getActiveApiKey, batchProducts, characters, scenes, updateProduct, updateBatch, currentBatch]);
 
-  const completedCount = batchProducts.filter((p) => p.analysisStatus === 'complete').length;
+  const completedCount = useMemo(
+    () => batchProducts.filter((p) => p.analysisStatus === 'complete').length,
+    [batchProducts]
+  );
   const allDone = completedCount === batchProducts.length && batchProducts.length > 0;
 
   return (
@@ -83,6 +97,9 @@ export function AnalysisPage() {
           <h2 className="text-xl font-semibold text-gray-900">Product Analysis</h2>
           <p className="text-sm text-muted mt-1">
             {completedCount}/{batchProducts.length} analyzed
+            {batchProducts.some((p) => p.analysisStatus === 'error') && (
+              <span className="text-danger ml-2">· some failed — fix errors in Settings then retry</span>
+            )}
           </p>
         </div>
         <div className="flex gap-2">
@@ -100,7 +117,7 @@ export function AnalysisPage() {
               onClick={() => navigate('/prompts')}
               className="px-4 py-2 bg-success text-white rounded-md text-sm font-medium hover:opacity-90"
             >
-              Generate Prompts
+              Generate Prompts →
             </button>
           )}
         </div>
@@ -111,7 +128,7 @@ export function AnalysisPage() {
           <div className="w-full bg-gray-200 rounded-full h-2">
             <div
               className="bg-primary h-2 rounded-full transition-all"
-              style={{ width: `${(progress / batchProducts.length) * 100}%` }}
+              style={{ width: `${batchProducts.length > 0 ? (progress / batchProducts.length) * 100 : 0}%` }}
             />
           </div>
         </div>

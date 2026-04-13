@@ -6,7 +6,7 @@ import { useCharacterStore } from '../stores/character-store';
 import { useSceneStore } from '../stores/scene-store';
 import { useSettingsStore } from '../stores/settings-store';
 import { useQueueStore } from '../stores/queue-store';
-import { generatePrompts } from '../services/claude-api';
+import { generatePrompts } from '../services/ai-api';
 import { submitQueue } from '../services/extension-bridge';
 import type { GenerationJob } from '../types/models';
 
@@ -22,10 +22,12 @@ interface PromptJob {
 }
 
 export function PromptsPage() {
-  const { products, currentBatchId } = useProductStore();
+  const products = useProductStore((s) => s.products);
+  const currentBatchId = useProductStore((s) => s.currentBatchId);
   const characters = useCharacterStore((s) => s.characters);
   const scenes = useSceneStore((s) => s.scenes);
-  const apiKey = useSettingsStore((s) => s.apiKey);
+  const aiProvider = useSettingsStore((s) => s.aiProvider);
+  const getActiveApiKey = useSettingsStore((s) => s.getActiveApiKey);
   const setJobs = useQueueStore((s) => s.setJobs);
   const navigate = useNavigate();
 
@@ -65,8 +67,9 @@ export function PromptsPage() {
   }, [batchProducts, characters, scenes]);
 
   const generateAllPrompts = useCallback(async () => {
+    const apiKey = getActiveApiKey();
     if (!apiKey) {
-      alert('Set your Claude API key in Settings.');
+      alert('Set your API key in Settings first.');
       return;
     }
 
@@ -93,6 +96,7 @@ export function PromptsPage() {
 
       try {
         const prompt = await generatePrompts(
+          aiProvider,
           apiKey,
           `${product.analysisResult.productType}, ${product.analysisResult.frameStyle}`,
           product.analysisResult.frameColor,
@@ -111,7 +115,7 @@ export function PromptsPage() {
     }
 
     setGenerating(false);
-  }, [apiKey, promptJobs, buildCombinations, batchProducts, characters, scenes]);
+  }, [aiProvider, getActiveApiKey, promptJobs, buildCombinations, batchProducts, characters, scenes]);
 
   const handleEditPrompt = (index: number, newPrompt: string) => {
     setPromptJobs((prev) => {
