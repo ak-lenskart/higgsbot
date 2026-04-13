@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import { Sidebar } from './components/layout/Sidebar';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { UploadPage } from './pages/UploadPage';
 import { AnalysisPage } from './pages/AnalysisPage';
 import { PromptsPage } from './pages/PromptsPage';
@@ -20,6 +21,7 @@ function AppLayout() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
       <main className="flex-1 overflow-y-auto bg-surface">
+        <ErrorBoundary>
         <Routes>
           <Route path="/" element={<Navigate to="/upload" replace />} />
           <Route path="/upload" element={<UploadPage />} />
@@ -31,6 +33,7 @@ function AppLayout() {
           <Route path="/scenes" element={<ScenesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
+        </ErrorBoundary>
       </main>
     </div>
   );

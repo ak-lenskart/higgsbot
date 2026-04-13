@@ -39,7 +39,7 @@ export function ProductCard({ product }: Props) {
           <div className="mt-1 space-y-1">
             <div className="flex gap-3 text-xs">
               <span className="text-gray-700">
-                <strong>Brand:</strong> {BRAND_LABELS[product.analysisResult.brand]}
+                <strong>Brand:</strong> {product.analysisResult.brand ? BRAND_LABELS[product.analysisResult.brand] ?? product.analysisResult.brand : '—'}
               </span>
               <span className="text-gray-700">
                 <strong>Type:</strong> {product.analysisResult.productType}
