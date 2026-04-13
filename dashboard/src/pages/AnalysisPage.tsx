@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useProductStore } from '../stores/product-store';
 import { useCharacterStore } from '../stores/character-store';
@@ -9,8 +9,10 @@ import { ProductCard } from '../components/analysis/ProductCard';
 
 export function AnalysisPage() {
   const { products, currentBatchId, updateProduct, updateBatch, batches } = useProductStore();
-  const characters = useCharacterStore((s) => s.characters.filter((c) => c.active));
-  const scenes = useSceneStore((s) => s.scenes.filter((sc) => sc.active));
+  const allCharacters = useCharacterStore((s) => s.characters);
+  const allScenes = useSceneStore((s) => s.scenes);
+  const characters = useMemo(() => allCharacters.filter((c) => c.active), [allCharacters]);
+  const scenes = useMemo(() => allScenes.filter((sc) => sc.active), [allScenes]);
   const apiKey = useSettingsStore((s) => s.apiKey);
   const navigate = useNavigate();
 
