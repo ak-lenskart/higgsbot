@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { width: 280px; padding: 12px; font-family: system-ui, sans-serif; font-size: 13px; color: #333; margin: 0; }
+    h1 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
+    .status { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot.idle { background: #9ca3af; }
+    .dot.running { background: #16a34a; }
+    .dot.paused { background: #d97706; }
+    .dot.error { background: #dc2626; }
+    .info { color: #6b7280; font-size: 12px; margin-bottom: 6px; }
+    .controls { display: flex; gap: 6px; margin-top: 8px; }
+    button { padding: 4px 10px; border: 1px solid #d1d5db; border-radius: 4px; background: white; cursor: pointer; font-size: 12px; }
+    button:hover { background: #f3f4f6; }
+    a { color: #2563eb; text-decoration: none; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>HiggsBot</h1>
+  <div class="status">
+    <span id="dot" class="dot idle"></span>
+    <span id="statusText">Idle</span>
+  </div>
+  <div id="progress" class="info"></div>
+  <div id="currentJob" class="info"></div>
+  <div class="controls">
+    <button id="pauseBtn" style="display:none">Pause</button>
+    <button id="resumeBtn" style="display:none">Resume</button>
+  </div>
+  <div style="margin-top: 12px;">
+    <a href="http://localhost:5173" target="_blank">Open Dashboard</a>
+  </div>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
