@@ -47,6 +47,23 @@ async function callClaude(
 
 // ─── Gemini ────────────────────────────────────────────────────────────────
 
+async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
+  try {
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) throw new Error('fetch failed');
+    const blob = await res.blob();
+    const data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    return { data, mimeType: blob.type || 'image/jpeg' };
+  } catch {
+    return null;
+  }
+}
+
 async function callGemini(
   apiKey: string,
   systemPrompt: string,
@@ -56,18 +73,12 @@ async function callGemini(
 ): Promise<string> {
   const parts: unknown[] = [];
   if (imageUrl) {
-    // Fetch image and convert to base64 for Gemini
-    try {
-      const imgRes = await fetch(imageUrl);
-      const blob = await imgRes.blob();
-      const base64 = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-        reader.readAsDataURL(blob);
-      });
-      parts.push({ inline_data: { mime_type: blob.type || 'image/jpeg', data: base64 } });
-    } catch {
-      // If image fetch fails, proceed without image
+    const img = await fetchImageAsBase64(imageUrl);
+    if (img) {
+      parts.push({ inline_data: { mime_type: img.mimeType, data: img.data } });
+    } else {
+      // CORS blocked — append URL as text hint so model still has some context
+      parts.push({ text: `[Product image URL: ${imageUrl}]` });
     }
   }
   parts.push({ text: userText });

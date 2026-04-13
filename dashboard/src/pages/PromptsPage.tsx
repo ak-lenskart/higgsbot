@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { v4 as uuid } from 'uuid';
 import { useProductStore } from '../stores/product-store';
@@ -34,19 +34,22 @@ export function PromptsPage() {
   const [promptJobs, setPromptJobs] = useState<PromptJob[]>([]);
   const [generating, setGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [promptsPerPid, setPromptsPerPid] = useState(3);
 
-  const batchProducts = products.filter(
-    (p) => p.batchId === currentBatchId && p.analysisStatus === 'complete'
+  const batchProducts = useMemo(
+    () => products.filter((p) => p.batchId === currentBatchId && p.analysisStatus === 'complete'),
+    [products, currentBatchId]
   );
 
-  // Build all character x scene combinations for each product
-  const buildCombinations = useCallback(() => {
+  const buildCombinations = useCallback((limit = promptsPerPid) => {
     const combos: PromptJob[] = [];
     for (const product of batchProducts) {
-      for (const charId of product.selectedCharacterIds) {
+      let count = 0;
+      outer: for (const charId of product.selectedCharacterIds) {
         const char = characters.find((c) => c.id === charId);
         if (!char) continue;
         for (const sceneId of product.selectedSceneIds) {
+          if (count >= limit) break outer;
           const scene = scenes.find((s) => s.id === sceneId);
           if (!scene) continue;
           combos.push({
@@ -54,17 +57,18 @@ export function PromptsPage() {
             productId: product.id,
             characterId: charId,
             characterName: char.name,
-            sceneId: sceneId,
+            sceneId,
             sceneName: scene.name,
             prompt: '',
             status: 'pending',
           });
+          count++;
         }
       }
     }
     setPromptJobs(combos);
     return combos;
-  }, [batchProducts, characters, scenes]);
+  }, [batchProducts, characters, scenes, promptsPerPid]);
 
   const generateAllPrompts = useCallback(async () => {
     const apiKey = getActiveApiKey();
@@ -75,7 +79,7 @@ export function PromptsPage() {
 
     let jobs = promptJobs;
     if (jobs.length === 0) {
-      jobs = buildCombinations();
+      jobs = buildCombinations(promptsPerPid);
     }
 
     setGenerating(true);
@@ -115,7 +119,7 @@ export function PromptsPage() {
     }
 
     setGenerating(false);
-  }, [aiProvider, getActiveApiKey, promptJobs, buildCombinations, batchProducts, characters, scenes]);
+  }, [aiProvider, getActiveApiKey, promptJobs, promptsPerPid, buildCombinations, batchProducts, characters, scenes]);
 
   const handleEditPrompt = (index: number, newPrompt: string) => {
     setPromptJobs((prev) => {
@@ -147,31 +151,45 @@ export function PromptsPage() {
   };
 
   const readyCount = promptJobs.filter((j) => j.status === 'ready').length;
-  const totalCombos = batchProducts.reduce(
+  const maxCombos = batchProducts.reduce(
     (sum, p) => sum + p.selectedCharacterIds.length * p.selectedSceneIds.length,
     0
   );
+  const previewCount = batchProducts.length * promptsPerPid;
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Prompts</h2>
           <p className="text-sm text-muted mt-1">
             {promptJobs.length > 0
               ? `${readyCount}/${promptJobs.length} ready`
-              : `${totalCombos} combinations to generate`}
+              : `${batchProducts.length} products · up to ${maxCombos} total combos`}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-3">
+          {/* Prompts per PID selector */}
           {promptJobs.length === 0 && (
-            <button
-              onClick={buildCombinations}
-              disabled={batchProducts.length === 0}
-              className="px-4 py-2 border border-border rounded-md text-sm hover:bg-surface-hover disabled:opacity-50"
-            >
-              Preview Combinations
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-600 whitespace-nowrap">Prompts per product:</span>
+              <div className="flex rounded-md border border-border overflow-hidden">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setPromptsPerPid(n)}
+                    className={`px-3 py-1.5 text-sm border-r border-border last:border-r-0 ${
+                      promptsPerPid === n
+                        ? 'bg-primary text-white'
+                        : 'text-gray-700 hover:bg-surface-hover'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs text-muted">= {previewCount} jobs</span>
+            </div>
           )}
           <button
             onClick={generateAllPrompts}
@@ -194,7 +212,8 @@ export function PromptsPage() {
       {generating && (
         <div className="mb-4">
           <div className="w-full bg-gray-200 rounded-full h-2">
-            <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${(progress / promptJobs.length) * 100}%` }} />
+            <div className="bg-primary h-2 rounded-full transition-all"
+              style={{ width: `${promptJobs.length > 0 ? (progress / promptJobs.length) * 100 : 0}%` }} />
           </div>
         </div>
       )}
