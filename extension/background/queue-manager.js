@@ -134,33 +134,40 @@ function scheduleNextJob() {
   chrome.alarms.create(ALARM_NEXT_JOB, { delayInMinutes: gapMs / 60000 });
 }
 
-async function ensureHiggsfieldTab() {
-  const tabs = await chrome.tabs.query({ url: ['https://higgsfield.ai/*', 'https://www.higgsfield.ai/*'] });
-  if (tabs.length > 0) {
-    await chrome.tabs.update(tabs[0].id, { active: true });
-    return tabs[0];
-  }
-
-  // Open new tab
-  const tab = await chrome.tabs.create({ url: 'https://higgsfield.ai/character', active: true });
-
-  // Wait for page to load
-  await new Promise((resolve) => {
-    const listener = (tabId, info) => {
-      if (tabId === tab.id && info.status === 'complete') {
+async function waitForTabLoad(tabId, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    const listener = (id, info) => {
+      if (id === tabId && info.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(listener);
         resolve();
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
-    setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      resolve();
-    }, 15000);
+    setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, timeoutMs);
   });
+}
 
-  // Extra wait for JS to initialize
-  await new Promise((r) => setTimeout(r, 3000));
+async function ensureHiggsfieldTab() {
+  const SOUL_URL = 'https://higgsfield.ai/image/soul';
+
+  // Look for existing Higgsfield tab already on the soul page
+  const existing = await chrome.tabs.query({ url: ['https://higgsfield.ai/*', 'https://www.higgsfield.ai/*'] });
+  if (existing.length > 0) {
+    const tab = existing[0];
+    await chrome.tabs.update(tab.id, { active: true });
+    // Navigate to soul page if not already there
+    if (!tab.url.includes('/image/soul')) {
+      await chrome.tabs.update(tab.id, { url: SOUL_URL });
+      await waitForTabLoad(tab.id);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    return tab;
+  }
+
+  // Open new tab directly on soul page
+  const tab = await chrome.tabs.create({ url: SOUL_URL, active: true });
+  await waitForTabLoad(tab.id);
+  await new Promise((r) => setTimeout(r, 4000)); // Wait for React to hydrate
   return tab;
 }
 

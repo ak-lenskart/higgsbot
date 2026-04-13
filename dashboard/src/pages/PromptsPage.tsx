@@ -136,6 +136,7 @@ export function PromptsPage() {
         id: j.id,
         productId: j.productId,
         characterId: j.characterId,
+        characterName: j.characterName,
         sceneId: j.sceneId,
         batchId: currentBatchId!,
         prompt: j.prompt,

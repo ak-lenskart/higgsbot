@@ -92,6 +92,7 @@ export interface GenerationJob {
   id: string;
   productId: string;
   characterId: string;
+  characterName: string;
   sceneId: string;
   batchId: string;
   prompt: string;
