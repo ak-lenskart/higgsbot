@@ -1,5 +1,7 @@
-// Content script injected into higgsfield.ai/*
-// Correct flow: /character → click card → /image/soul → inject prompt → Generate → capture
+// HiggsBot — Higgsfield Soul automation
+// Strategy: stay on /image/soul, inject prompt, click Generate, capture images.
+// Character switching: try clicking bottom thumbnails by name (best-effort).
+// If character not found, continue with whichever character is already active.
 
 const HB_MSG = {
   EXECUTE_GENERATION: 'EXECUTE_GENERATION',
@@ -11,7 +13,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     executeGeneration(message.job)
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, errorType: 'unknown', error: String(err?.message || err) }));
-    return true; // keep channel open for async response
+    return true;
   }
   if (message.type === HB_MSG.CHECK_SESSION) {
     sendResponse({ loggedIn: isLoggedIn() });
@@ -19,217 +21,192 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-// ─── Utilities ─────────────────────────────────────────────────────────────
+// ─── Helpers ───────────────────────────────────────────────────────────────
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function isLoggedIn() {
-  // If page contains a standalone Sign In / Log In button, user is logged out
   const btns = Array.from(document.querySelectorAll('a, button'));
-  const signIn = btns.find((el) => {
+  return !btns.some((el) => {
     const t = el.textContent.trim();
     return t === 'Sign In' || t === 'Log in' || t === 'Log In';
   });
-  return !signIn;
 }
 
-/** Wait for a condition fn to return truthy, polling every 500ms */
-async function waitFor(condFn, timeoutMs = 10000) {
+async function waitFor(fn, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = condFn();
-    if (result) return result;
-    await sleep(500);
+    const r = fn();
+    if (r) return r;
+    await sleep(300);
   }
   return null;
 }
 
-/** Find the main prompt textarea on /image/soul */
+// ─── Element finders (based on real Higgsfield Soul UI) ─────────────────────
+
 function findPromptTextarea() {
-  // Higgsfield uses a textarea with a long placeholder
+  // Higgsfield Soul: large textarea at bottom with placeholder about describing/imagining
   const all = Array.from(document.querySelectorAll('textarea'));
   return (
-    all.find((t) => t.placeholder?.toLowerCase().includes('describe')) ||
-    all.find((t) => t.placeholder?.toLowerCase().includes('imagine')) ||
-    all.find((t) => t.placeholder?.toLowerCase().includes('prompt')) ||
-    all[0] || null
+    all.find((t) => /describe|imagine|prompt/i.test(t.placeholder || '')) ||
+    all[0] ||
+    null
   );
 }
 
-/** Find the Generate button (yellow, says "Generate") */
 function findGenerateButton() {
+  // Yellow "Generate → 0.5" button
   return Array.from(document.querySelectorAll('button')).find((b) =>
-    b.textContent.trim().toLowerCase().startsWith('generate')
+    /^generate/i.test(b.textContent.trim())
   ) || null;
 }
 
-/** Inject text into a React-controlled textarea */
-function injectText(el, text) {
-  el.focus();
-  // Use native value setter to bypass React's synthetic events
-  const proto = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-  if (proto?.set) {
-    proto.set.call(el, text);
-  } else {
-    el.value = text;
-  }
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
-}
+// Try clicking a character thumbnail on the /image/soul bottom bar
+// The thumbnails show character names like "STEVE", "KAT", "0.5 SELFIE"
+function tryClickCharacterThumbnail(characterName) {
+  if (!characterName) return false;
+  const target = characterName.trim().toUpperCase();
 
-/** Snapshot all visible content/result image srcs (exclude UI icons) */
-function getContentImageUrls() {
-  return new Set(
-    Array.from(document.querySelectorAll('img'))
-      .map((img) => img.src || img.getAttribute('data-src') || '')
-      .filter((src) =>
-        src.startsWith('http') &&
-        !src.includes('favicon') &&
-        !src.includes('logo') &&
-        !src.includes('avatar') &&
-        !src.includes('icon') &&
-        src.length > 40
-      )
-  );
-}
+  // Look for any element whose visible text matches the character name
+  const all = Array.from(document.querySelectorAll('*'));
+  const match = all.find((el) => {
+    if (el.children.length > 0) return false; // leaf nodes only
+    return el.textContent.trim().toUpperCase() === target;
+  });
 
-// ─── Step 1: Navigate to /character and select character ───────────────────
+  if (!match) return false;
 
-async function goToCharacterPage() {
-  if (!window.location.pathname.startsWith('/character') ||
-      window.location.pathname.length > '/character'.length + 2) {
-    window.location.href = 'https://higgsfield.ai/character';
-    // Wait for navigation to complete
-    await waitFor(() => window.location.pathname === '/character', 8000);
-    await sleep(2000); // wait for cards to render
-  }
-}
-
-async function clickCharacterByName(name) {
-  if (!name) return false;
-  const target = name.trim().toLowerCase();
-
-  // Wait for character cards to load
-  const cards = await waitFor(() => {
-    const els = Array.from(document.querySelectorAll('*')).filter((el) => {
-      if (el.children.length > 0) return false;
-      const t = el.textContent.trim().toLowerCase();
-      return t === target;
-    });
-    return els.length > 0 ? els : null;
-  }, 8000);
-
-  if (!cards || cards.length === 0) {
-    console.warn(`[HiggsBot] Character "${name}" not found — using current character`);
-    return false;
-  }
-
-  // Click the card or its nearest clickable ancestor
-  let el = cards[0];
-  // Walk up to find the clickable card wrapper (usually <a> or <div> with role="button")
-  let clickTarget = el;
-  let parent = el.parentElement;
-  for (let i = 0; i < 5; i++) {
-    if (!parent) break;
-    if (parent.tagName === 'A' || parent.tagName === 'BUTTON' ||
-        parent.getAttribute('role') === 'button' || parent.onclick) {
-      clickTarget = parent;
-      break;
+  // Click the closest button/div ancestor
+  let node = match;
+  for (let i = 0; i < 6; i++) {
+    if (!node) break;
+    if (node.tagName === 'BUTTON' || node.tagName === 'A' ||
+        node.getAttribute('role') === 'button' ||
+        node.style?.cursor === 'pointer') {
+      node.click();
+      return true;
     }
-    parent = parent.parentElement;
+    node = node.parentElement;
   }
-
-  clickTarget.click();
-  console.log(`[HiggsBot] Clicked character: ${name}`);
+  // fallback: click the match itself
+  match.parentElement?.click();
   return true;
 }
 
-// ─── Step 2: Wait until we're on /image/soul ───────────────────────────────
+// ─── React-safe text injection ─────────────────────────────────────────────
 
-async function waitForSoulPage(timeoutMs = 15000) {
-  // After clicking a character, Higgsfield navigates to /image/soul
-  const arrived = await waitFor(
-    () => window.location.pathname.includes('/image/soul'),
-    timeoutMs
-  );
-  if (!arrived) {
-    // Maybe clicking character navigated to a different URL — try navigating manually
-    window.location.href = 'https://higgsfield.ai/image/soul';
-    await waitFor(() => window.location.pathname.includes('/image/soul'), 8000);
+function injectText(el, text) {
+  el.focus();
+  // Use the native HTMLTextAreaElement value setter so React picks up the change
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype, 'value'
+  )?.set;
+  if (nativeSetter) {
+    nativeSetter.call(el, text);
+  } else {
+    el.value = text;
   }
-  // Wait for textarea to appear (React hydration)
-  await waitFor(findPromptTextarea, 8000);
-  await sleep(500); // settle
+  el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-// ─── Step 3: Generate ──────────────────────────────────────────────────────
+// ─── Image snapshot diff ───────────────────────────────────────────────────
 
-async function generate(prompt) {
-  const textarea = await waitFor(findPromptTextarea, 8000);
-  if (!textarea) {
-    return { success: false, errorType: 'selector_not_found', error: 'Prompt textarea not found on /image/soul' };
-  }
+function snapshotImages() {
+  return new Set(
+    Array.from(document.querySelectorAll('img'))
+      .map((img) => img.src)
+      .filter((s) => s && s.startsWith('http') &&
+        !/favicon|logo|icon|avatar|profile/i.test(s))
+  );
+}
 
-  const generateBtn = await waitFor(findGenerateButton, 5000);
-  if (!generateBtn) {
-    return { success: false, errorType: 'selector_not_found', error: 'Generate button not found' };
-  }
-
-  // Snapshot existing images BEFORE generating
-  const before = getContentImageUrls();
-
-  // Inject prompt
-  injectText(textarea, prompt);
-  await sleep(400);
-
-  // Verify injection worked (React may be slow)
-  if (!textarea.value?.trim()) {
-    textarea.focus();
-    document.execCommand('selectAll', false, null);
-    document.execCommand('insertText', false, prompt);
-    await sleep(300);
-  }
-
-  // Click Generate
-  generateBtn.click();
-  console.log('[HiggsBot] Clicked Generate, waiting for images...');
-  await sleep(3000);
-
-  // Poll for new images (up to 2 min)
-  const deadline = Date.now() + 120000;
+async function waitForNewImages(before, timeoutMs = 130000) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    await sleep(2500);
-    const current = getContentImageUrls();
-    const newImgs = [...current].filter((src) => !before.has(src));
-    if (newImgs.length >= 1) {
-      await sleep(2500); // let remaining images load
-      const final = [...getContentImageUrls()].filter((src) => !before.has(src));
-      console.log(`[HiggsBot] Got ${final.length} new images`);
-      return { success: true, imageUrls: final };
+    await sleep(2000);
+    const current = Array.from(document.querySelectorAll('img'))
+      .map((i) => i.src)
+      .filter((s) => s && s.startsWith('http') &&
+        !/favicon|logo|icon|avatar|profile/i.test(s));
+    const newOnes = current.filter((s) => !before.has(s));
+    if (newOnes.length >= 1) {
+      // Wait a moment for all 4 images to finish loading
+      await sleep(3000);
+      const final = Array.from(document.querySelectorAll('img'))
+        .map((i) => i.src)
+        .filter((s) => s && s.startsWith('http') &&
+          !/favicon|logo|icon|avatar|profile/i.test(s) && !before.has(s));
+      if (final.length > 0) return final;
     }
   }
-
-  return { success: false, errorType: 'generation_timeout', error: 'No new images after 2 minutes' };
+  return null;
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
 
 async function executeGeneration(job) {
-  const startTime = Date.now();
+  const t0 = Date.now();
 
+  // 1. Must be logged in
   if (!isLoggedIn()) {
     return { success: false, errorType: 'session_expired', error: 'Not logged into Higgsfield' };
   }
 
-  // Step 1 — character selection (on /character page)
-  await goToCharacterPage();
-  await clickCharacterByName(job.characterName);
+  // 2. Must be on /image/soul (queue-manager ensures this before sending message)
+  if (!window.location.pathname.includes('/image/soul')) {
+    return {
+      success: false,
+      errorType: 'selector_not_found',
+      error: `Wrong page: ${window.location.pathname}. Needs to be higgsfield.ai/image/soul`,
+    };
+  }
 
-  // Step 2 — wait for soul page
-  await waitForSoulPage(15000);
+  // 3. Wait for textarea to be ready
+  const textarea = await waitFor(findPromptTextarea, 10000);
+  if (!textarea) {
+    return { success: false, errorType: 'selector_not_found', error: 'Prompt textarea not found — is Higgsfield Soul loaded?' };
+  }
 
-  // Step 3 — generate
-  const result = await generate(job.prompt);
+  // 4. Try switching character via bottom thumbnail (best-effort, no failure)
+  if (job.characterName) {
+    const switched = tryClickCharacterThumbnail(job.characterName);
+    if (switched) {
+      await sleep(1500); // let UI update
+    } else {
+      console.log(`[HiggsBot] Character "${job.characterName}" thumbnail not found — continuing with active character`);
+    }
+  }
 
-  return { ...result, generationTimeMs: Date.now() - startTime };
+  // 5. Snapshot images before generation
+  const before = snapshotImages();
+
+  // 6. Inject prompt
+  injectText(textarea, job.prompt);
+  await sleep(500);
+
+  // Verify it landed (React can be slow)
+  if (!textarea.value?.trim()) {
+    textarea.focus();
+    document.execCommand('selectAll', false, null);
+    document.execCommand('insertText', false, job.prompt);
+    await sleep(400);
+  }
+
+  // 7. Click Generate
+  const btn = await waitFor(findGenerateButton, 5000);
+  if (!btn) {
+    return { success: false, errorType: 'selector_not_found', error: 'Generate button not found' };
+  }
+  btn.click();
+  console.log('[HiggsBot] Generate clicked, waiting for images…');
+
+  // 8. Wait for new images
+  const images = await waitForNewImages(before, 130000);
+  if (!images || images.length === 0) {
+    return { success: false, errorType: 'generation_timeout', error: 'No new images appeared after 2 min' };
+  }
+
+  return { success: true, imageUrls: images, generationTimeMs: Date.now() - t0 };
 }
