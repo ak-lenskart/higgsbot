@@ -109,13 +109,40 @@ function PAGE_snapshotImages() {
     .filter((s) => s && s.startsWith('http') && !/favicon|logo|icon|avatar|profile/i.test(s));
 }
 
+// Returns a diagnostic snapshot of the page for debugging
+function PAGE_diagnose() {
+  const textareas = Array.from(document.querySelectorAll('textarea'));
+  const buttons = Array.from(document.querySelectorAll('button')).map(b => b.textContent.trim().slice(0, 40));
+  return {
+    url: window.location.href,
+    textareaCount: textareas.length,
+    textareaPlaceholders: textareas.map(t => t.placeholder?.slice(0, 60)),
+    buttonsWithGenerate: buttons.filter(b => /generate/i.test(b)),
+    allButtons: buttons.slice(0, 20),
+    readyState: document.readyState,
+  };
+}
+
+// Check if the soul page UI is ready (textarea + generate button present)
+function PAGE_isSoulReady() {
+  const textarea = Array.from(document.querySelectorAll('textarea'))
+    .find((t) => /describe|imagine|prompt/i.test(t.placeholder || '')) ||
+    document.querySelector('textarea');
+  const btn = Array.from(document.querySelectorAll('button'))
+    .find((b) => /^generate/i.test(b.textContent.trim()));
+  return !!(textarea && btn);
+}
+
 function PAGE_injectAndGenerate(prompt) {
   // Find textarea
   const textareas = Array.from(document.querySelectorAll('textarea'));
   const textarea =
     textareas.find((t) => /describe|imagine|prompt/i.test(t.placeholder || '')) ||
     textareas[0];
-  if (!textarea) return { ok: false, error: 'No textarea found' };
+  if (!textarea) {
+    const allBtns = Array.from(document.querySelectorAll('button')).map(b=>b.textContent.trim()).slice(0,10);
+    return { ok: false, error: `No textarea found. Buttons: ${JSON.stringify(allBtns)}. URL: ${location.href}` };
+  }
 
   // Inject prompt via React-safe native setter
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
@@ -127,18 +154,19 @@ function PAGE_injectAndGenerate(prompt) {
   textarea.dispatchEvent(new InputEvent('input', { bubbles: true }));
   textarea.dispatchEvent(new Event('change', { bubbles: true }));
 
-  // Verify injection
+  // Verify injection; try execCommand if React setter didn't stick
   if (!textarea.value?.trim()) {
     textarea.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('insertText', false, prompt);
+    textarea.dispatchEvent(new InputEvent('input', { bubbles: true }));
   }
 
   // Find and click Generate button
   const btn = Array.from(document.querySelectorAll('button')).find((b) =>
     /^generate/i.test(b.textContent.trim())
   );
-  if (!btn) return { ok: false, error: 'Generate button not found' };
+  if (!btn) return { ok: false, error: `Generate button not found. URL: ${location.href}` };
 
   btn.click();
   return { ok: true, promptValue: textarea.value?.slice(0, 80) };
@@ -182,7 +210,7 @@ async function selectCharacter(tab, characterName) {
     const url = await exec(tab.id, PAGE_getCurrentUrl);
     if (url && url.includes('/image/soul')) {
       console.log('[HiggsBot] Arrived at /image/soul');
-      await sleep(2000); // let UI settle
+      await sleep(4000); // let React hydrate fully
       return;
     }
   }
@@ -192,6 +220,25 @@ async function selectCharacter(tab, characterName) {
 }
 
 async function generateImage(tab, job) {
+  // Wait for the soul page UI to be fully ready (textarea + generate button)
+  console.log('[HiggsBot] Waiting for soul page UI to be ready...');
+  let ready = false;
+  for (let i = 0; i < 20; i++) {
+    ready = await exec(tab.id, PAGE_isSoulReady);
+    if (ready) break;
+    await sleep(1000);
+  }
+
+  if (!ready) {
+    // Log diagnostics before failing
+    const diag = await exec(tab.id, PAGE_diagnose);
+    console.error('[HiggsBot] Soul page not ready after 20s. Diagnostics:', JSON.stringify(diag));
+    return { success: false, errorType: 'selector_not_found', error: `Soul page not ready. ${JSON.stringify(diag)}` };
+  }
+
+  // Extra settle time for React state
+  await sleep(1500);
+
   // Snapshot before
   const beforeUrls = await exec(tab.id, PAGE_snapshotImages) || [];
 
@@ -200,6 +247,8 @@ async function generateImage(tab, job) {
   console.log('[HiggsBot] Generate result:', JSON.stringify(genResult));
 
   if (!genResult?.ok) {
+    const diag = await exec(tab.id, PAGE_diagnose);
+    console.error('[HiggsBot] Inject failed. Diagnostics:', JSON.stringify(diag));
     return { success: false, errorType: 'selector_not_found', error: genResult?.error || 'Injection failed' };
   }
 
